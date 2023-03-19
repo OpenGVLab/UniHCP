@@ -1,0 +1,1992 @@
+common:  # prefix
+  share_backbone_group: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+  share_neck_group: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+  share_decoder_group: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+  solver:
+    type: SolverMultiTaskDev
+
+  model_entry_type: aio_entry_v2
+
+  neck:
+    type: SimpleNeck
+    kwargs:
+      mask_dim: 256
+#      task_sp_list: ['mask_map']
+
+  lr_scheduler:
+    type: 'Cosine'
+    kwargs:
+      eta_min: 0.
+      base_lr: 1.e-5
+      warmup_lr: 1.e-3
+      warmup_steps: 1500
+
+  backbone_multiplier: 1.
+  pos_embed_multiplier: 1.
+  layer_decay:
+    num_layers: 12
+    layer_decay_rate: 0.75
+    lpe_lr: True
+
+  optimizer:
+    type: Adafactor_dev
+    kwargs:
+      beta1: 0.9
+      clip_beta2: 0.999
+      clip_threshold: 1.
+      decay_rate: -0.8
+      scale_parameter: False
+      relative_step: False
+      weight_decay: 0.05
+
+  auto_denan: False
+
+  workers: 4
+  max_iter: 104816 #61446  # 0.1628001628001628 * |61446 for 149813 // 512 * 210
+
+  deterministic: True   # seed control
+  cudnn_deterministic: False
+  worker_rank: True
+  random_seed: 233
+
+  print_freq: 10
+  verbose_loss: False
+
+  save_interval: 10000000
+
+
+  sync: True
+
+# task_specific_param = ['backbone', 'neck', 'decoder', 'dataset', 'sampler', 'lr_scheduler', 'optimizer']
+tasks :  # prefix
+  0:     # prefix
+    name: cocopose_256x192
+    loss_weight: 572000.
+    gres_ratio: 1  # int, > 0, = Task_GPUs / (world_Size/sum(all_gres_ratios))
+    backbone:
+      type: vit_base_patch16
+      kwargs:
+        task_sp_list: ['rel_pos_h', 'rel_pos_w'] # wrong list would somehow cause .cuda() stuck without error
+        pretrained: True
+        lms_checkpoint_train: fairscale
+        window: False
+        test_pos_mode: learnable_interpolate
+        learnable_pos: True
+        drop_path_rate: 0.2
+        img_size: 1344
+    dataset:
+      type: COCOPosDatasetDev
+      kwargs:
+        use_udp: True
+        ann_file: '/mnt/path...to.../coco/annotations/person_keypoints_train2017.json'
+        img_prefix: '/mnt/path...to.../coco/train2017/'
+        data_cfg: {
+                      'image_size':[192, 256],
+                      'heatmap_size':[48, 64],
+                      'num_output_channels': 17,
+                      'num_joints': 17,
+                      'dataset_channel': [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],],
+                      'inference_channel': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+                      'soft_nms': False,
+                      'nms_thr': 1.0,
+                      'oks_thr': 0.9,
+                      'vis_thr': 0.2,
+                      'use_gt_bbox': False,
+                      'det_bbox_thr': 0.0,
+                      'bbox_file': 'COCO_val2017_detections_AP_H_56_person.json' # files in core/data/datasets/images/resources/* or absolute path
+        }
+    sampler:
+      batch_size: 286
+      shuffle_strategy: 1
+    decoder:
+      type: AIOHead
+      kwargs:
+        task: pos_bce
+        task_sp_list: ['loss.',
+                       'predictor.query_feat',
+                       'predictor.query_embed'] # wrong list would somehow cause .cuda() stuck without error
+        loss_weight: 1.0
+        transformer_predictor_cfg:
+          hidden_dim: 256
+          num_queries: 17
+          nheads: 8
+          dim_feedforward: 2048
+          dec_layers: 9
+          pre_norm: False
+          arch: fan_in
+          enforce_input_project: False
+          mask_on: False  # for pose only
+          num_feature_levels: 1
+          cross_pos_embed: anchor
+          cls_out_dim: 1
+        loss_cfg:
+          type: POS_FocalDiceLoss_bce_cls_emb
+          kwargs:
+            target_type: GaussianHeatMap
+            cfg:
+              deep_supervision: True
+              ignore_blank: False
+              class_weight: 0.001
+              dice_weight: 0.0
+              mask_weight: 1.0
+              redundant_queries: 1
+              dec_layers: 9
+              sample_weight: [0.38647058, 0.33721068, 0.33721068, 0.29444877999999997, 0.29444877999999997, 0.49926846999999996,
+                              0.49926846999999996, 0.3977959, 0.3977959, 0.36479149499999997, 0.36479149499999997, 0.434015965,
+                              0.434015965, 0.33046311, 0.33046311, 0.27734555, 0.27734555]
+        test_cfg:
+          use_udp: True
+
+      ########
+  1:     # prefix
+    name: human3.6m_parsing  # loss_weight 5x smaller than as appeared in the paper due to legacy configuration scale for dice/mask_weight
+    loss_weight: 120.
+    gres_ratio: 3  # int, > 0, = Task_GPUs / (world_Size/sum(all_gres_ratios))
+    backbone:
+      type: vit_base_patch16
+      kwargs:
+        task_sp_list: ['rel_pos_h', 'rel_pos_w'] # wrong list would somehow cause .cuda() stuck without error
+        pretrained: True
+        lms_checkpoint_train: fairscale
+        window: False
+        test_pos_mode: learnable_interpolate
+        learnable_pos: True
+        drop_path_rate: 0.2
+        img_size: 1344
+    dataset:
+      type: Human3M6ParsingDataset
+      kwargs:
+        data_path: /mnt/path...to.../human3.6 # 
+        cfg:
+          is_flip: True
+          crop_size: [480, 480]
+          is_multi_scale: True
+          scale_factor: 11
+          center_crop_test: False
+          base_size: 480
+#          mean: [0.485, 0.456, 0.406]
+#          std: [0.229, 0.224, 0.225]
+          eval_crop_size: [480, 480]
+          is_photometricdistortion: True
+          brightness: 32
+          contrast_range: [ 0.5, 1.5 ]
+          saturation_range: [ 0.5, 1.5 ]
+          hue_delta: 18
+          is_rotate: True
+
+          ####
+          ignore_value: 255 # duplicated with decoder.kwargs.ignore_value
+          num_classes: 25
+          label_list: [0, 1, 2, 3, 6, 7, 8, 17, 18, 19, 25, 26, 27, 32, 33, 34, 38, 39, 43, 44,
+             46, 49, 50, 56, 58]
+#          reduce_zero_label: True
+
+    sampler:
+      batch_size: 40  # per card
+      shuffle_strategy: 1
+    decoder:
+      type: AIOHead
+      kwargs:
+        task: par_bce_cls_emb
+        task_sp_list: [ 'loss.',
+                        'predictor.query_feat',
+                        'predictor.query_embed'] # wrong list would somehow cause .cuda() stuck without error
+        loss_weight: 1.0
+        transformer_predictor_cfg:
+          hidden_dim: 256
+          num_queries: 25
+          nheads: 8
+          dim_feedforward: 2048
+          dec_layers: 9
+          pre_norm: False
+          arch: fan_in
+          enforce_input_project: False
+          mask_on: False
+          num_feature_levels: 1
+          cross_pos_embed: anchor
+          cls_out_dim: 1
+        loss_cfg:
+          type: FocalDiceLoss_bce_cls_emb_sample_weight
+          kwargs:
+            cfg:
+              deep_supervision: True
+              no_object_weight: 0.1
+
+              class_weight: 0.25
+              dice_weight: 5.0
+              mask_weight: 5.0
+              redundant_queries: 1
+              num_points: 12544
+
+              dec_layers: 9
+
+              oversample_ratio: 3.0
+              importance_sample_ratio: 0.75
+              sample_weight: [1.0, 0.97325, 0.96685, 0.9903500000000001, 0.97325, 0.96685, 0.9903500000000001, 0.9929, 0.9459,
+                              0.89645, 0.9929, 0.9459, 0.89645, 0.981, 0.9997, 0.99265, 0.9997, 0.99265,
+                              0.9995, 0.9999, 0.9999, 0.9758, 0.9256500000000001, 0.9758, 0.9256500000000001]
+  2:     # prefix
+    name: reid_cloth_dependent_256x128
+    loss_weight: 960.
+    gres_ratio: 1  # int, > 0, = Task_GPUs / (world_Size/sum(all_gres_ratios))
+    backbone:
+      type: vit_base_patch16
+      kwargs:
+        task_sp_list: ['rel_pos_h', 'rel_pos_w'] # wrong list would somehow cause .cuda() stuck without error
+        pretrained: True
+        lms_checkpoint_train: fairscale
+        window: False
+        test_pos_mode: learnable_interpolate
+        learnable_pos: True
+        drop_path_rate: 0.2
+        img_size: 1344
+    dataset:
+      type: ReIDDataset
+      kwargs:
+        task_spec:
+          list :
+            - /mnt/path...to.../market1501/data_list/fileList.txt
+            - /mnt/path...to.../cuhk03_1/data_list/fileList.txt
+            - /mnt/path...to.../MSMT17_V1/data_list/fileList.txt
+          meta :
+            - /mnt/path...to.../market1501/data_list/metaList.txt
+            - /mnt/path...to.../cuhk03_1/data_list/metaList.txt
+            - /mnt/path...to.../MSMT17_V1/data_list/metaList.txt
+          prefix :
+            - /mnt/path...to.../
+            - /mnt/path...to.../
+            - /mnt/path...to.../
+        augmentation:
+          height: 256
+          width : 128
+          earser: True
+          brightness: False
+          contrast: False
+          vit: True
+          split:
+            bg_type: 0
+            aug_type: 3
+            prob: 0.2
+        loader: pil
+    sampler:
+      type: RandomIdentity
+      batch_size: 96
+      shuffle_strategy: 6
+
+    neck:
+      type: SimpleNeck
+      kwargs:
+        mask_dim: 256
+        mask_forward: False
+    decoder:
+      type: AIOHead
+      kwargs:
+        task: reid
+        task_sp_list: [ 'loss.',
+                        'predictor.query_feat',
+                        'predictor.query_embed'] # wrong list would somehow cause .cuda() stuck without error
+        loss_weight: 1.0
+        transformer_predictor_cfg:
+          hidden_dim: 256
+          num_queries: 6
+          nheads: 8
+          dim_feedforward: 2048
+          dec_layers: 9
+          pre_norm: False
+          arch: fan_in
+          enforce_input_project: False
+          mask_on: False  # for pose only
+          num_feature_levels: 1
+          cross_pos_embed: anchor
+          reid_cfgs:
+            head_type: cat
+          cls_out_dim: 1
+        loss_cfg:
+          type: Softmax_TripletLoss_wBN
+          kwargs:
+            in_features: 1536
+            out_features: 2559 #751 #3261
+            tri_margin: ~
+            balance_weight: 1
+            cfg:
+              out_norm: batch_norm
+              aux_loss: False
+  3: # prefix
+    name: LIP_parsing  # loss_weight 5x smaller than as appeared in the paper due to legacy configuration scale for dice/mask_weight
+    loss_weight: 58.
+    gres_ratio: 1  # int, > 0, = Task_GPUs / (world_Size/sum(all_gres_ratios))
+    backbone:
+      type: vit_base_patch16
+      kwargs:
+        task_sp_list: [ 'rel_pos_h', 'rel_pos_w' ] # wrong list would somehow cause .cuda() stuck without error
+        pretrained: True
+        lms_checkpoint_train: fairscale
+        window: False
+        test_pos_mode: learnable_interpolate
+        learnable_pos: True
+        drop_path_rate: 0.2
+        img_size: 1344
+    dataset:
+      type: LIPParsingDataset
+      kwargs:
+        data_path: /mnt/path...to.../LIP # 
+        cfg:
+          is_flip: True
+          crop_size: [ 480, 480 ]
+          is_multi_scale: True
+          scale_factor: 11
+          center_crop_test: False
+          base_size: 480
+          #          mean: [0.485, 0.456, 0.406]
+          #          std: [0.229, 0.224, 0.225]
+          eval_crop_size: [ 480, 480 ]
+          is_photometricdistortion: True
+          brightness: 32
+          contrast_range: [ 0.5, 1.5 ]
+          saturation_range: [ 0.5, 1.5 ]
+          hue_delta: 18
+          is_rotate: True
+
+          ####
+          ignore_value: 255 # duplicated with decoder.kwargs.ignore_value
+          num_classes: 20
+          label_list: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+    #          reduce_zero_label: True
+
+    sampler:
+      batch_size: 58  # per card
+      shuffle_strategy: 1
+    decoder:
+      type: AIOHead
+      kwargs:
+        task: par_bce_cls_emb
+        task_sp_list: [ 'loss.',
+                        'predictor.query_feat',
+                        'predictor.query_embed'] # wrong list would somehow cause .cuda() stuck without error
+        loss_weight: 1.0
+        transformer_predictor_cfg:
+          hidden_dim: 256
+          num_queries: 20
+          nheads: 8
+          dim_feedforward: 2048
+          dec_layers: 9
+          pre_norm: False
+          arch: fan_in
+          enforce_input_project: False
+          mask_on: False
+          num_feature_levels: 1
+          cross_pos_embed: anchor
+          cls_out_dim: 1
+        loss_cfg:
+          type: FocalDiceLoss_bce_cls_emb_sample_weight
+          kwargs:
+            cfg:
+              deep_supervision: True
+              no_object_weight: 0.1
+
+              class_weight: 0.25
+              dice_weight: 5.0
+              mask_weight: 5.0
+              redundant_queries: 1
+              num_points: 12544
+
+              dec_layers: 9
+
+              oversample_ratio: 3.0
+              importance_sample_ratio: 0.75
+              sample_weight:   [1.0, 0.23064802, 0.69115619, 0.078918, 0.05449412,
+                               0.76045565, 0.03942617, 0.26859694, 0.07149892, 0.53259799,
+                               0.01493664, 0.01700479, 0.02081282, 0.80158886, 0.6331166699999999,
+                               0.6331166699999999, 0.1574913, 0.1574913, 0.26741514, 0.26741514]
+  4: # prefix
+    name: CIHP_parsing  # loss_weight 5x smaller than as appeared in the paper due to legacy configuration scale for dice/mask_weight
+    loss_weight: 54.
+    gres_ratio: 1  # int, > 0, = Task_GPUs / (world_Size/sum(all_gres_ratios))
+    backbone:
+      type: vit_base_patch16
+      kwargs:
+        task_sp_list: [ 'rel_pos_h', 'rel_pos_w' ] # wrong list would somehow cause .cuda() stuck without error
+        pretrained: True
+        lms_checkpoint_train: fairscale
+        window: False
+        test_pos_mode: learnable_interpolate
+        learnable_pos: True
+        drop_path_rate: 0.2
+        img_size: 1344
+    dataset:
+      type: CIHPParsingDataset  # train for 150 epochs
+      kwargs:
+        data_path: /mnt/path...to.../CIHP # 
+        cfg:
+          is_flip: True
+          crop_size: [ 480, 480 ]
+          is_multi_scale: True
+          scale_factor: 11
+          center_crop_test: False
+          base_size: 480
+          #          mean: [0.485, 0.456, 0.406]
+          #          std: [0.229, 0.224, 0.225]
+          eval_crop_size: [ 480, 480 ]
+          is_photometricdistortion: True
+          brightness: 32
+          contrast_range: [ 0.5, 1.5 ]
+          saturation_range: [ 0.5, 1.5 ]
+          hue_delta: 18
+          is_rotate: True
+
+          ####
+          ignore_value: 255 # duplicated with decoder.kwargs.ignore_value
+          num_classes: 20
+          label_list: [ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19 ]
+    #          reduce_zero_label: True
+
+    sampler:
+      batch_size: 54  # per card
+      shuffle_strategy: 1
+    decoder:
+      type: AIOHead
+      kwargs:
+        task: par_bce_cls_emb
+        task_sp_list: [ 'loss.',
+                        'predictor.query_feat',
+                        'predictor.query_embed'] # wrong list would somehow cause .cuda() stuck without error
+        loss_weight: 1.0
+        transformer_predictor_cfg:
+          hidden_dim: 256
+          num_queries: 20
+          nheads: 8
+          dim_feedforward: 2048
+          dec_layers: 9
+          pre_norm: False
+          arch: fan_in
+          enforce_input_project: False
+          mask_on: False
+          num_feature_levels: 1
+          cross_pos_embed: anchor
+          cls_out_dim: 1
+        loss_cfg:
+          type: FocalDiceLoss_bce_cls_emb_sample_weight
+          kwargs:
+            cfg:
+              deep_supervision: True
+              no_object_weight: 0.1
+
+              class_weight: 0.25
+              dice_weight: 5.0
+              mask_weight: 5.0
+              redundant_queries: 1
+              num_points: 12544
+
+              dec_layers: 9
+
+              oversample_ratio: 3.0
+              importance_sample_ratio: 0.75
+              sample_weight: [1.0, 0.25279349, 0.97595474, 0.06368458, 0.08419378,
+                             0.91287129, 0.18341584, 0.50346535, 0.12729844, 0.6937058,
+                             0.96898868, 0.07022631, 0.07464639, 0.99359972, 0.88490099,
+                             0.88490099, 0.27644979000000003, 0.27644979000000003, 0.33016266, 0.33016266]
+  5:     # prefix
+    name: pedattr_PA100k
+    loss_weight: 1.72
+    gres_ratio: 1  # int, > 0, = Task_GPUs / (world_Size/sum(all_gres_ratios))
+    backbone:
+      type: vit_base_patch16
+      kwargs:
+        task_sp_list: ['rel_pos_h', 'rel_pos_w'] # wrong list would somehow cause .cuda() stuck without error
+        pretrained: True
+        lms_checkpoint_train: fairscale
+        window: False
+        test_pos_mode: learnable_interpolate
+        learnable_pos: True
+        drop_path_rate: 0.2
+        img_size: 1344
+    dataset:
+      type: AttrDataset
+      kwargs:
+        task_spec:
+          dataset: 'PA-100k'
+          data_path: /mnt/path...to.../PA-100k/dataset.pkl
+          root_path: /mnt/path...to.../PA-100k/data/
+        augmentation:
+          height: 256
+          width: 192
+    sampler:
+      batch_size: 172  # per card
+      shuffle_strategy: 1
+    neck:
+      type: SimpleNeck
+      kwargs:
+        mask_dim: 256
+        mask_forward: False
+    decoder:
+      type: AIOHead
+      kwargs:
+        task: pedattr
+        task_sp_list: [ 'loss.',
+                        'predictor.query_feat',
+                        'predictor.query_embed'] # wrong list would somehow cause .cuda() stuck without error
+        loss_weight: 1.0
+        transformer_predictor_cfg:
+          hidden_dim: 256
+          num_queries: 26
+          nheads: 8
+          dim_feedforward: 2048
+          dec_layers: 9
+          pre_norm: False
+          arch: fan_in
+          enforce_input_project: False
+          mask_on: False
+          num_feature_levels: 1
+          cross_pos_embed: anchor
+          pedattr_cfgs:
+            head_type: per_q
+          cls_out_dim: 1
+        loss_cfg:
+          type: CEL_Sigmoid
+          kwargs:
+            sample_weight: [0.04354444,0.17997778,0.5834,0.4166,0.04947778,0.15104444,
+                            0.10775556,0.04191111,0.00472222,0.01688889, 0.03241111,
+                            0.71171111,0.17344444,0.11484444, 0.006,
+                            0.185, 0.19273333, 0.1601, 0.00952222, 0.01345556,
+                            0.92437778, 0.06216667, 0.46044444, 0.35266667, 0.29462222,
+                            0.35271111]
+            size_average: True
+            cfg: { }
+  6: # prefix
+    name: pedattr_RAP2
+    loss_weight: 1.3
+    gres_ratio: 1  # int, > 0, = Task_GPUs / (world_Size/sum(all_gres_ratios))
+    backbone:
+      type: vit_base_patch16
+      kwargs:
+        task_sp_list: [ 'rel_pos_h', 'rel_pos_w' ] # wrong list would somehow cause .cuda() stuck without error
+        pretrained: True
+        lms_checkpoint_train: fairscale
+        window: False
+        test_pos_mode: learnable_interpolate
+        learnable_pos: True
+        drop_path_rate: 0.2
+        img_size: 1344
+    dataset:
+      type: AttrDataset
+      kwargs:
+        task_spec:
+          dataset: 'rap2'
+          data_path: /mnt/path...to.../rap2/dataset.pkl
+          root_path: /mnt/path...to.../rap2/RAP_dataset/
+        augmentation:
+          height: 256
+          width: 192
+    sampler:
+      batch_size: 130  # per card
+      shuffle_strategy: 1
+    neck:
+      type: SimpleNeck
+      kwargs:
+        mask_dim: 256
+        mask_forward: False
+    decoder:
+      type: AIOHead
+      kwargs:
+        task: pedattr
+        task_sp_list: [ 'loss.',
+                        'predictor.query_feat',
+                        'predictor.query_embed'] # wrong list would somehow cause .cuda() stuck without error
+        loss_weight: 1.0
+        transformer_predictor_cfg:
+          hidden_dim: 256
+          num_queries: 54
+          nheads: 8
+          dim_feedforward: 2048
+          dec_layers: 9
+          pre_norm: False
+          arch: fan_in
+          enforce_input_project: False
+          mask_on: False
+          num_feature_levels: 1
+          cross_pos_embed: anchor
+          pedattr_cfgs:
+            head_type: per_q
+          cls_out_dim: 1
+        loss_cfg:
+          type: CEL_Sigmoid
+          kwargs:
+            sample_weight: [0.00575482, 0.19323551, 0.93186936, 0.01533638, 0.0663203 ,
+                            0.21637255, 0.07765333, 0.04739267, 0.23145872, 0.11599429,
+                            0.28473868, 0.03042256, 0.04175559, 0.09656624, 0.02725814,
+                            0.57574732, 0.02970137, 0.02045833, 0.02796462, 0.26612013,
+                            0.11776048, 0.26311761, 0.20243439, 0.0844973 , 0.01432083,
+                            0.22655756, 0.08448258, 0.0213267 , 0.0690726 , 0.02636033,
+                            0.03813491, 0.0274642 , 0.01036163, 0.02444696, 0.296631  ,
+                            0.00887509, 0.4031026 , 0.54734115, 0.03529429, 0.31651531,
+                            0.13645261, 0.77788735, 0.07419455, 0.93875749, 0.05350073,
+                            0.03379303, 0.02666941, 0.04840822, 0.02328422, 0.01050881,
+                            0.01789736, 0.0254478 , 0.13287609, 0.01022916]
+            size_average: True
+            cfg: { }
+  7:     # prefix
+    name: aicpose_256x192
+    loss_weight: 1440000.
+    gres_ratio: 3  # int, > 0, = Task_GPUs / (world_Size/sum(all_gres_ratios))
+    backbone:
+      type: vit_base_patch16
+      kwargs:
+        task_sp_list: ['rel_pos_h', 'rel_pos_w'] # wrong list would somehow cause .cuda() stuck without error
+        pretrained: True
+        lms_checkpoint_train: fairscale
+        window: False
+        test_pos_mode: learnable_interpolate
+        learnable_pos: True
+        drop_path_rate: 0.2
+        img_size: 1344
+    dataset:
+      type: MultiPoseDatasetDev
+      kwargs:
+        use_udp: True
+        simp_aug: True
+        dataset_name: 'aic'
+        ann_file: '/mnt/path...to.../ai_challenge/annotations/aic_train.json'
+        img_prefix: '/mnt/path...to.../ai_challenge/ai_challenger_keypoint_train_20170902/keypoint_train_images_20170902/'
+        data_cfg: {
+                      'image_size':[192, 256],
+                      'heatmap_size':[48, 64],
+                      'num_output_channels': 14,
+                      'num_joints': 14,
+                      'dataset_channel': [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13],],
+                      'inference_channel': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13],
+
+                      'flip_pairs': [[0, 3], [1, 4], [2, 5], [6, 9], [7, 10], [8, 11],],
+                      'upper_body_ids': [0, 1, 2, 3, 4, 5, 12, 13],
+                      'lower_body_ids': [6, 7, 8, 9, 10, 11],
+                      'use_different_joint_weights': False,
+                      'joint_weights': [1., 1.2, 1.5, 1., 1.2, 1.5, 1., 1.2, 1.5, 1., 1.2, 1.5, 1., 1.],
+
+                      'soft_nms': False,
+                      'nms_thr': 1.0,
+                      'oks_thr': 0.9,
+                      'vis_thr': 0.2,
+                      'use_gt_bbox': True,
+                      'det_bbox_thr': 0.0,
+                      'bbox_file': 'COCO_val2017_detections_AP_H_56_person.json' # files in core/data/datasets/images/resources/* or absolute path
+        }
+    sampler:
+      batch_size: 240
+      shuffle_strategy: 1
+    decoder:
+      type: AIOHead
+      kwargs:
+        task: pos_bce
+        task_sp_list: ['loss.',
+                       'predictor.query_feat',
+                       'predictor.query_embed'] # wrong list would somehow cause .cuda() stuck without error
+        loss_weight: 1.0
+        transformer_predictor_cfg:
+          hidden_dim: 256
+          num_queries: 14
+          nheads: 8
+          dim_feedforward: 2048
+          dec_layers: 9
+          pre_norm: False
+          arch: fan_in
+          enforce_input_project: False
+          mask_on: False  # for pose only
+          num_feature_levels: 1
+          cross_pos_embed: anchor
+          cls_out_dim: 1
+        loss_cfg:
+          type: POS_FocalDiceLoss_bce_cls_emb
+          kwargs:
+            target_type: GaussianHeatMap
+            cfg:
+              deep_supervision: True
+              ignore_blank: False
+              class_weight: 0.001
+              dice_weight: 0.0
+              mask_weight: 1.0
+              redundant_queries: 1
+              dec_layers: 9
+              sample_weight: [0.98064613, 0.977893565, 0.97715356, 0.98064613, 0.977893565,
+                              0.97715356, 0.9594528200000001, 0.85703431, 0.7504981850000001,
+                              0.9594528200000001, 0.85703431, 0.7504981850000001, 0.97149646, 0.98605877]
+        test_cfg:
+          use_udp: True
+  8:     # prefix
+    name: Peddet_6sets
+    loss_weight: 424.
+    gres_ratio: 53  # int, > 0, = Task_GPUs / (world_Size/sum(all_gres_ratios))
+    backbone:
+      type: vit_base_patch16
+      kwargs:
+        task_sp_list: ['rel_pos_h', 'rel_pos_w'] # wrong list would somehow cause .cuda() stuck without error
+        pretrained: True
+        lms_checkpoint_train: fairscale
+        window: False
+        test_pos_mode: learnable_interpolate
+        learnable_pos: True
+        round_padding: True
+        drop_path_rate: 0.2
+        img_size: 1344
+    dataset:
+      type: PedestrainDetectionDataset
+      kwargs:
+        task_spec:
+          img_folder:
+            - /mnt/path...to.../CrowdHuman/Images
+            - /mnt/path...to.../ECP/
+            - /mnt/path...to.../CityPersons/
+            - /mnt/path...to.../WiderPerson/Images
+            - /mnt/path...to.../coco/train2017/
+            - /mnt/path...to.../WIDER_Pedestrian/Images/
+          ann_file:
+            - /mnt/path...to.../CrowdHuman/annotations/train.json
+            - /mnt/path...to.../ECP/day/ECP_remove_no_person_img.json
+            - /mnt/path...to.../CityPersons/CityPersons_remove_no_person_img.json
+            - /mnt/path...to.../WiderPerson/WiderPerson_remove_no_person_img.json
+            - /mnt/path...to.../cocopersons/coco_person_remove_no_person_img.json
+            - /mnt/path...to.../WIDER_Pedestrian/WIDER_Pedestrian_remove_no_person_img.json
+          return_masks: False
+        augmentation: {}
+        vit: True
+    sampler:
+      batch_size: 1  # per card
+      batch_accumulation: 4
+      shuffle_strategy: 1
+    decoder:
+      type: AIOHead
+      kwargs:
+        task: peddet
+        task_sp_list: ['loss.',
+                       'predictor.query_feat',
+                       'predictor.query_embed',
+                       'predictor.bbox_embed'] # wrong list would somehow cause .cuda() stuck without error
+        loss_weight: 1.0
+        transformer_predictor_cfg:
+          hidden_dim: 256
+          num_queries: 900  # 3 * 300
+          nheads: 8
+          dim_feedforward: 2048
+          dec_layers: 9
+          pre_norm: False
+          arch: fan_in
+          enforce_input_project: False
+          mask_on: False  # for pose only
+          num_feature_levels: 1
+          cross_pos_embed: anchor
+          cls_out_dim: 1
+          peddet_cfgs:
+            share_content_query: 3
+            query_pe_dim: 2
+        loss_cfg:
+          type: DetFocalDiceLoss
+          kwargs:
+            cfg:
+              deep_supervision: True
+              focal_alpha: 0.25
+              class_weight: 2.0
+              bbox_weight: 5.0
+              giou_weight: 2.
+              ign_thr: 0.7
+              dec_layers: 9 # w/o init proposal
+  9:     # prefix
+    name: reid_cloth_agnostic_256x128
+    loss_weight: 4150.
+    gres_ratio: 1  # int, > 0, = Task_GPUs / (world_Size/sum(all_gres_ratios))
+    backbone:
+      type: vit_base_patch16
+      kwargs:
+        task_sp_list: ['rel_pos_h', 'rel_pos_w'] # wrong list would somehow cause .cuda() stuck without error
+        pretrained: True
+        lms_checkpoint_train: fairscale
+        window: False
+        test_pos_mode: learnable_interpolate
+        learnable_pos: True
+        drop_path_rate: 0.2
+        img_size: 1344
+    dataset:
+      type: ReIDDataset
+      kwargs:
+        task_spec:
+          list :
+            - /mnt/path...to.../DGMarket/DG-Market-fileLists.txt
+            - /mnt/path...to.../PRCC/rgb/PRCC-train-fileLists.txt
+            - /mnt/path...to.../LaST/LaST-fileLists.txt
+          meta :
+            - /mnt/path...to.../DGMarket/DG-Market-metaLists.txt
+            - /mnt/path...to.../PRCC/rgb/PRCC-train-metaLists.txt
+            - /mnt/path...to.../LaST/LaST-metaLists.txt
+          prefix :
+            - /mnt/path...to.../DGMarket/data/
+            - /mnt/path...to.../PRCC/rgb/
+            - /mnt/path...to.../LaST/
+        augmentation:
+          height: 256
+          width : 128
+          earser: True
+          brightness: False
+          contrast: False
+          vit: True
+          split:
+            bg_type: 0
+            aug_type: 3
+            prob: 0.2
+        loader: pil
+    sampler:
+      type: RandomIdentity
+      batch_size: 415
+      shuffle_strategy: 6
+
+    neck:
+      type: SimpleNeck
+      kwargs:
+        mask_dim: 256
+        mask_forward: False
+    decoder:
+      type: AIOHead
+      kwargs:
+        task: reid
+        task_sp_list: [ 'loss.',
+                        'predictor.query_feat',
+                        'predictor.query_embed'] # wrong list would somehow cause .cuda() stuck without error
+        loss_weight: 1.0
+        transformer_predictor_cfg:
+          hidden_dim: 256
+          num_queries: 6
+          nheads: 8
+          dim_feedforward: 2048
+          dec_layers: 9
+          pre_norm: False
+          arch: fan_in
+          enforce_input_project: False
+          mask_on: False  # for pose only
+          num_feature_levels: 1
+          cross_pos_embed: anchor
+          reid_cfgs:
+            head_type: cat
+          cls_out_dim: 1
+        loss_cfg:
+          type: Softmax_TripletLoss_wBN
+          kwargs:
+            in_features: 1536
+            out_features: 5901 #751 #3261
+            tri_margin: ~
+            balance_weight: 1
+            cfg:
+              out_norm: batch_norm
+              aux_loss: False
+  10:     # prefix
+    name: posetrack_256x192
+    loss_weight: 370000.
+    gres_ratio: 1  # int, > 0, = Task_GPUs / (world_Size/sum(all_gres_ratios))
+    backbone:
+      type: vit_base_patch16
+      kwargs:
+        task_sp_list: ['rel_pos_h', 'rel_pos_w'] # wrong list would somehow cause .cuda() stuck without error
+        pretrained: True
+        lms_checkpoint_train: fairscale
+        window: False
+        test_pos_mode: learnable_interpolate
+        learnable_pos: True
+        drop_path_rate: 0.2
+        img_size: 1344
+    dataset:
+      type: MultiPoseDatasetDev
+      kwargs:
+        use_udp: True
+        simp_aug: True
+        dataset_name: 'posetrack'
+        ann_file: '/mnt/path...to.../PoseChallenge2018/annotations/posetrack18_train.json'
+        img_prefix: '/mnt/path...to.../PoseChallenge2018/'
+        data_cfg: {
+                      'image_size':[192, 256],
+                      'heatmap_size':[48, 64],
+                      'num_output_channels': 15,
+                      'num_joints': 15,
+                      'dataset_channel': [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],],
+                      'inference_channel': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+
+                      'flip_pairs': [[3, 4], [5, 6], [7, 8], [9, 10], [11, 12], [13, 14], ],
+                      'upper_body_ids': [0, 1, 2, 3, 4, 5, 6, 7, 8,],
+                      'lower_body_ids': [9, 10, 11, 12, 13, 14],
+                      'use_different_joint_weights': False,
+                      'joint_weights': [1., 1., 1., 1., 1., 1.2, 1.2, 1.5, 1.5, 1., 1., 1.2, 1.2, 1.5, 1.5],
+
+                      'soft_nms': False,
+                      'nms_thr': 1.0,
+                      'oks_thr': 0.9,
+                      'vis_thr': 0.2,
+                      'use_gt_bbox': True,
+                      'det_bbox_thr': 0.0,
+                      'bbox_file': 'COCO_val2017_detections_AP_H_56_person.json' # files in core/data/datasets/images/resources/* or absolute path
+        }
+    sampler:
+      batch_size: 185
+      shuffle_strategy: 1
+    decoder:
+      type: AIOHead
+      kwargs:
+        task: pos_bce
+        task_sp_list: ['loss.',
+                       'predictor.query_feat',
+                       'predictor.query_embed'] # wrong list would somehow cause .cuda() stuck without error
+        loss_weight: 1.0
+        transformer_predictor_cfg:
+          hidden_dim: 256
+          num_queries: 15 # remove invalid class by sample weight
+          nheads: 8
+          dim_feedforward: 2048
+          dec_layers: 9
+          pre_norm: False
+          arch: fan_in
+          enforce_input_project: False
+          mask_on: False  # for pose only
+          num_feature_levels: 1
+          cross_pos_embed: anchor
+          cls_out_dim: 1
+        loss_cfg:
+          type: POS_FocalDiceLoss_bce_cls_emb
+          kwargs:
+            target_type: GaussianHeatMap
+            cfg:
+              deep_supervision: True
+              ignore_blank: False
+              class_weight: 0.001
+              dice_weight: 0.0
+              mask_weight: 1.0
+              redundant_queries: 1
+              dec_layers: 9
+              sample_weight: [0.81831569, 0.75692071, 0.74175951,
+                              0.789882655, 0.789882655, 0.659771425, 0.659771425, 0.625614735,
+                              0.625614735, 0.737772405, 0.737772405, 0.665022735, 0.665022735,
+                              0.59563039, 0.59563039]
+        test_cfg:
+          use_udp: True
+  11:     # prefix
+    name: h36m_pose_256x192
+    loss_weight: 1192000.
+    gres_ratio: 2  # int, > 0, = Task_GPUs / (world_Size/sum(all_gres_ratios))
+    backbone:
+      type: vit_base_patch16
+      kwargs:
+        task_sp_list: ['rel_pos_h', 'rel_pos_w'] # wrong list would somehow cause .cuda() stuck without error
+        pretrained: True
+        lms_checkpoint_train: fairscale
+        window: False
+        test_pos_mode: learnable_interpolate
+        learnable_pos: True
+        drop_path_rate: 0.2
+        img_size: 1344
+    dataset:
+      type: COCOPosDatasetDev
+      kwargs:
+        use_udp: True
+        ann_file:  /mnt/path...to.../h36m/processed/annotation_body2d/h36m_coco_train.json
+        img_prefix: /mnt/path...to.../h36m/processed/images/
+        data_cfg: {
+                      'image_size':[192, 256],
+                      'heatmap_size':[48, 64],
+                      'num_output_channels': 17,
+                      'num_joints': 17,
+                      'dataset_channel': [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],],
+                      'inference_channel': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+                      'soft_nms': False,
+                      'nms_thr': 1.0,
+                      'oks_thr': 0.9,
+                      'vis_thr': 0.2,
+                      'use_gt_bbox': True,
+                      'det_bbox_thr': 0.0,
+                      'bbox_file': 'COCO_val2017_detections_AP_H_56_person.json' # files in core/data/datasets/images/resources/* or absolute path
+        }
+    sampler:
+      batch_size: 298
+      shuffle_strategy: 1
+    decoder:
+      type: AIOHead
+      kwargs:
+        task: pos_bce
+        task_sp_list: ['loss.',
+                       'predictor.query_feat',
+                       'predictor.query_embed'] # wrong list would somehow cause .cuda() stuck without error
+        loss_weight: 1.0
+        transformer_predictor_cfg:
+          hidden_dim: 256
+          num_queries: 17
+          nheads: 8
+          dim_feedforward: 2048
+          dec_layers: 9
+          pre_norm: False
+          arch: fan_in
+          enforce_input_project: False
+          mask_on: False  # for pose only
+          num_feature_levels: 1
+          cross_pos_embed: anchor
+          cls_out_dim: 1
+        loss_cfg:
+          type: POS_FocalDiceLoss_bce_cls_emb
+          kwargs:
+            target_type: GaussianHeatMap
+            cfg:
+              deep_supervision: True
+              ignore_blank: False
+              class_weight: 0.001
+              dice_weight: 0.0
+              mask_weight: 1.0
+              redundant_queries: 1
+              dec_layers: 9
+              sample_weight: [1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1., 1.]
+        test_cfg:
+          use_udp: True
+  12:     # prefix
+    name: mhp_pose_256x192
+    loss_weight: 154000.
+    gres_ratio: 1  # int, > 0, = Task_GPUs / (world_Size/sum(all_gres_ratios))
+    backbone:
+      type: vit_base_patch16
+      kwargs:
+        task_sp_list: ['rel_pos_h', 'rel_pos_w'] # wrong list would somehow cause .cuda() stuck without error
+        pretrained: True
+        lms_checkpoint_train: fairscale
+        window: False
+        test_pos_mode: learnable_interpolate
+        learnable_pos: True
+        drop_path_rate: 0.2
+        img_size: 1344
+    dataset:
+      type: MultiPoseDatasetDev
+      kwargs:
+        use_udp: True
+        simp_aug: True
+        dataset_name: 'mhp'
+        ann_file: '/mnt/path...to.../pose_MHPv2/train.json'
+        img_prefix: '/mnt/path...to.../LV-MHP-v2/train/images'
+        data_cfg: {
+                      'image_size':[192, 256],
+                      'heatmap_size':[48, 64],
+                      'num_output_channels': 16,
+                      'num_joints': 16,
+                      'dataset_channel': [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,],],
+                      'inference_channel': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,],
+
+                      'flip_pairs': [[0, 5], [1, 4], [2, 3], [10, 15], [11, 14], [12, 13], ],
+                      'upper_body_ids': [7, 8, 9, 10, 11, 12, 13, 14, 15],
+                      'lower_body_ids': [0, 1, 2, 3, 4, 5, 6],
+                      'use_different_joint_weights': False,
+                      'joint_weights': [1.5, 1.2, 1., 1., 1.2, 1.5, 1., 1., 1., 1., 1.5, 1.2, 1., 1., 1.2, 1.5],
+
+                      'soft_nms': False,
+                      'nms_thr': 1.0,
+                      'oks_thr': 0.9,
+                      'vis_thr': 0.2,
+                      'use_gt_bbox': True,
+                      'det_bbox_thr': 0.0,
+                      'bbox_file': 'COCO_val2017_detections_AP_H_56_person.json' # files in core/data/datasets/images/resources/* or absolute path
+        }
+    sampler:
+      batch_size: 77
+      shuffle_strategy: 1
+    decoder:
+      type: AIOHead
+      kwargs:
+        task: pos_bce
+        task_sp_list: ['loss.',
+                       'predictor.query_feat',
+                       'predictor.query_embed'] # wrong list would somehow cause .cuda() stuck without error
+        loss_weight: 1.0
+        transformer_predictor_cfg:
+          hidden_dim: 256
+          num_queries: 16
+          nheads: 8
+          dim_feedforward: 2048
+          dec_layers: 9
+          pre_norm: False
+          arch: fan_in
+          enforce_input_project: False
+          mask_on: False  # for pose only
+          num_feature_levels: 1
+          cross_pos_embed: anchor
+          cls_out_dim: 1
+        loss_cfg:
+          type: POS_FocalDiceLoss_bce_cls_emb
+          kwargs:
+            target_type: GaussianHeatMap
+            cfg:
+              deep_supervision: True
+              ignore_blank: False
+              class_weight: 0.001
+              dice_weight: 0.0
+              mask_weight: 1.0
+              redundant_queries: 1
+              dec_layers: 9
+              sample_weight: [0.463188095, 0.6055728499999999, 0.732992125, 0.732992125, 0.6055728499999999,
+              0.463188095, 0.74209784, 0.92598716, 0.9642093, 0.98767263,
+              0.67156195, 0.6861140800000001, 0.85427203, 0.85427203, 0.6861140800000001,
+              0.67156195]
+        test_cfg:
+          use_udp: True
+  13:     # prefix
+    name: pennaction_pose_256x192
+    loss_weight: 132000.
+    gres_ratio: 1  # int, > 0, = Task_GPUs / (world_Size/sum(all_gres_ratios))
+    backbone:
+      type: vit_base_patch16
+      kwargs:
+        task_sp_list: ['rel_pos_h', 'rel_pos_w'] # wrong list would somehow cause .cuda() stuck without error
+        pretrained: True
+        lms_checkpoint_train: fairscale
+        window: False
+        test_pos_mode: learnable_interpolate
+        learnable_pos: True
+        drop_path_rate: 0.2
+        img_size: 1344
+    dataset:
+      type: MultiPoseDatasetDev
+      kwargs:
+        use_udp: True
+        simp_aug: True
+        dataset_name: 'penn_action'
+        ann_file: '/mnt/path...to.../pose_penn_action/train.json'
+        img_prefix: '/mnt/path...to.../PENN/Penn_Action/frames'
+        data_cfg: {
+                      'image_size':[192, 256],
+                      'heatmap_size':[48, 64],
+                      'num_output_channels': 13,
+                      'num_joints': 13,
+                      'dataset_channel': [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,],],
+                      'inference_channel': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,],
+
+                      'flip_pairs': [[1, 2], [3, 4], [5, 6], [7, 8], [9, 10], [11, 12], ],
+                      'upper_body_ids': [0, 1, 2, 3, 4, 5, 6, 7, 8],
+                      'lower_body_ids': [9, 10, 11, 12],
+                      'use_different_joint_weights': False,
+                      'joint_weights': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,],
+
+                      'soft_nms': False,
+                      'nms_thr': 1.0,
+                      'oks_thr': 0.9,
+                      'vis_thr': 0.2,
+                      'use_gt_bbox': True,
+                      'det_bbox_thr': 0.0,
+                      'bbox_file': 'COCO_val2017_detections_AP_H_56_person.json' # files in core/data/datasets/images/resources/* or absolute path
+        }
+    sampler:
+      batch_size: 66
+      shuffle_strategy: 1
+    decoder:
+      type: AIOHead
+      kwargs:
+        task: pos_bce
+        task_sp_list: ['loss.',
+                       'predictor.query_feat',
+                       'predictor.query_embed'] # wrong list would somehow cause .cuda() stuck without error
+        loss_weight: 1.0
+        transformer_predictor_cfg:
+          hidden_dim: 256
+          num_queries: 13
+          nheads: 8
+          dim_feedforward: 2048
+          dec_layers: 9
+          pre_norm: False
+          arch: fan_in
+          enforce_input_project: False
+          mask_on: False  # for pose only
+          num_feature_levels: 1
+          cross_pos_embed: anchor
+          cls_out_dim: 1
+        loss_cfg:
+          type: POS_FocalDiceLoss_bce_cls_emb
+          kwargs:
+            target_type: GaussianHeatMap
+            cfg:
+              deep_supervision: True
+              ignore_blank: False
+              class_weight: 0.001
+              dice_weight: 0.0
+              mask_weight: 1.0
+              redundant_queries: 1
+              dec_layers: 9
+              sample_weight: [0.9304317, 0.7091321349999999, 0.7091321349999999, 0.7636155, 0.7636155,
+              0.72129652, 0.72129652, 0.786229165, 0.786229165, 0.842012585,
+              0.842012585, 0.77971057, 0.77971057]
+        test_cfg:
+          use_udp: True
+  14:     # prefix
+    name: 3dpw_pose_256x192
+    loss_weight: 262000.
+    gres_ratio: 1  # int, > 0, = Task_GPUs / (world_Size/sum(all_gres_ratios))
+    backbone:
+      type: vit_base_patch16
+      kwargs:
+        task_sp_list: ['rel_pos_h', 'rel_pos_w'] # wrong list would somehow cause .cuda() stuck without error
+        pretrained: True
+        lms_checkpoint_train: fairscale
+        window: False
+        test_pos_mode: learnable_interpolate
+        learnable_pos: True
+        drop_path_rate: 0.2
+        img_size: 1344
+    dataset:
+      type: MultiPoseDatasetDev
+      kwargs:
+        use_udp: True
+        simp_aug: True
+        dataset_name: '3DPW'
+        ann_file: '/mnt/path...to.../3DPW/dataset_merged.json'
+        img_prefix: '/mnt/path...to.../3DPW/imageFiles'
+        data_cfg: {
+                      'image_size':[192, 256],
+                      'heatmap_size':[48, 64],
+                      'num_output_channels': 18,
+                      'num_joints': 18,
+                      'dataset_channel': [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],],
+                      'inference_channel': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+
+                      'flip_pairs': [[2, 5], [3, 6], [4, 7], [8, 11], [9, 12], [10, 13], [14, 15], [16, 17]],
+                      'upper_body_ids': [0, 1, 2 ,3, 4, 5, 6, 714, 15, 16, 17],
+                      'lower_body_ids': [8, 9, 10, 11, 12, 13],
+                      'use_different_joint_weights': False,
+                      'joint_weights': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ],
+
+                      'soft_nms': False,
+                      'nms_thr': 1.0,
+                      'oks_thr': 0.9,
+                      'vis_thr': 0.2,
+                      'use_gt_bbox': True,
+                      'det_bbox_thr': 0.0,
+                      'bbox_file': 'COCO_val2017_detections_AP_H_56_person.json' # files in core/data/datasets/images/resources/* or absolute path
+        }
+    sampler:
+      batch_size: 131
+      shuffle_strategy: 1
+    decoder:
+      type: AIOHead
+      kwargs:
+        task: pos_bce
+        task_sp_list: ['loss.',
+                       'predictor.query_feat',
+                       'predictor.query_embed'] # wrong list would somehow cause .cuda() stuck without error
+        loss_weight: 1.0
+        transformer_predictor_cfg:
+          hidden_dim: 256
+          num_queries: 18
+          nheads: 8
+          dim_feedforward: 2048
+          dec_layers: 9
+          pre_norm: False
+          arch: fan_in
+          enforce_input_project: False
+          mask_on: False  # for pose only
+          num_feature_levels: 1
+          cross_pos_embed: anchor
+          cls_out_dim: 1
+        loss_cfg:
+          type: POS_FocalDiceLoss_bce_cls_emb
+          kwargs:
+            target_type: GaussianHeatMap
+            cfg:
+              deep_supervision: True
+              ignore_blank: False
+              class_weight: 0.001
+              dice_weight: 0.0
+              mask_weight: 1.0
+              redundant_queries: 1
+              dec_layers: 9
+              sample_weight: [0.81362905, 0.92006165, 0.90966899, 0.83948673, 0.78390512,
+              0.90966899, 0.83948673, 0.78390512, 0.916771645, 0.895912625,
+              0.86267757, 0.916771645, 0.895912625, 0.86267757, 0.683630395,
+              0.683630395, 0.6390913949999999, 0.6390913949999999]
+        test_cfg:
+          use_udp: True
+  15:     # prefix
+    name: jrdb2022pose_256x192
+    loss_weight: 532000.
+    gres_ratio: 1  # int, > 0, = Task_GPUs / (world_Size/sum(all_gres_ratios))
+    backbone:
+      type: vit_base_patch16
+      kwargs:
+        task_sp_list: ['rel_pos_h', 'rel_pos_w'] # wrong list would somehow cause .cuda() stuck without error
+        pretrained: True
+        lms_checkpoint_train: fairscale
+        window: False
+        test_pos_mode: learnable_interpolate
+        learnable_pos: True
+        drop_path_rate: 0.2
+        img_size: 1344
+    dataset:
+      type: MultiPoseDatasetDev
+      kwargs:
+        use_udp: True
+        simp_aug: True
+        dataset_name: 'JRDB2022'
+        ann_file: /mnt/path...to.../JRDB2022/train.json
+        img_prefix: /mnt/path...to.../JRDB2022/images/
+        data_cfg: {
+                      'image_size':[192, 256],
+                      'heatmap_size':[48, 64],
+                      'num_output_channels': 17,
+                      'num_joints': 17,
+                      'dataset_channel': [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],],
+                      'inference_channel': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,],
+                      'flip_pairs': [[2, 5], [3, 6], [4, 7], [8, 11], [9, 12], [10, 13], ],
+                      'upper_body_ids': [0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 14, 15, 16,],
+                      'lower_body_ids': [9, 10, 12, 13],
+                      'use_different_joint_weights': False,
+                      'joint_weights': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+
+                      'soft_nms': False,
+                      'nms_thr': 1.0,
+                      'oks_thr': 0.9,
+                      'vis_thr': 0.2,
+                      'use_gt_bbox': True,
+                      'det_bbox_thr': 0.0,
+                      'bbox_file': 'COCO_val2017_detections_AP_H_56_person.json' # files in core/data/datasets/images/resources/* or absolute path
+        }
+    sampler:
+      batch_size: 266
+      shuffle_strategy: 1
+    decoder:
+      type: AIOHead
+      kwargs:
+        task: pos_bce
+        task_sp_list: ['loss.',
+                       'predictor.query_feat',
+                       'predictor.query_embed'] # wrong list would somehow cause .cuda() stuck without error
+        loss_weight: 1.0
+        transformer_predictor_cfg:
+          hidden_dim: 256
+          num_queries: 17
+          nheads: 8
+          dim_feedforward: 2048
+          dec_layers: 9
+          pre_norm: False
+          arch: fan_in
+          enforce_input_project: False
+          mask_on: False  # for pose only
+          num_feature_levels: 1
+          cross_pos_embed: anchor
+          cls_out_dim: 1
+        loss_cfg:
+          type: POS_FocalDiceLoss_bce_cls_emb
+          kwargs:
+            target_type: GaussianHeatMap
+            cfg:
+              deep_supervision: True
+              ignore_blank: False
+              class_weight: 0.001
+              dice_weight: 0.0
+              mask_weight: 1.0
+              redundant_queries: 1
+              dec_layers: 9
+              sample_weight: [0.90384634, 0.82524231, 0.89927266, 0.90945538, 0.92796942, 0.89927266,
+                              0.90945538, 0.92796942, 0.9912784,  0.84353379, 0.97898463, 0.9912784,
+                              0.84353379, 0.97898463, 0.97418356, 0.94284516, 0.93372039,]
+
+        test_cfg:
+          use_udp: True
+  16: # prefix
+    name: pedattr_HARDHC
+    loss_weight: 0.54
+    gres_ratio: 1  # int, > 0, = Task_GPUs / (world_Size/sum(all_gres_ratios))
+    backbone:
+      type: vit_base_patch16
+      kwargs:
+        task_sp_list: [ 'rel_pos_h', 'rel_pos_w' ] # wrong list would somehow cause .cuda() stuck without error
+        pretrained: True
+        lms_checkpoint_train: fairscale
+        window: False
+        test_pos_mode: learnable_interpolate
+        learnable_pos: True
+        drop_path_rate: 0.2
+        img_size: 1344
+    dataset:
+      type: AttrDataset
+      kwargs:
+        task_spec:
+          dataset: 'HARDHC'
+          data_path: /mnt/path...to.../HARDHC/dataset.pkl
+          root_path: /mnt/path...to.../HARDHC/croped_image/
+        augmentation:
+          height: 256
+          width: 192
+    sampler:
+      batch_size: 54  # per card
+      shuffle_strategy: 1
+    neck:
+      type: SimpleNeck
+      kwargs:
+        mask_dim: 256
+        mask_forward: False
+    decoder:
+      type: AIOHead
+      kwargs:
+        task: pedattr
+        task_sp_list: [ 'loss.',
+                        'predictor.query_feat',
+                        'predictor.query_embed'] # wrong list would somehow cause .cuda() stuck without error
+        loss_weight: 1.0
+        transformer_predictor_cfg:
+          hidden_dim: 256
+          num_queries: 14
+          nheads: 8
+          dim_feedforward: 2048
+          dec_layers: 9
+          pre_norm: False
+          arch: fan_in
+          enforce_input_project: False
+          mask_on: False
+          num_feature_levels: 1
+          cross_pos_embed: anchor
+          pedattr_cfgs:
+            head_type: per_q
+          cls_out_dim: 1
+        loss_cfg:
+          type: CEL_Sigmoid
+          kwargs:
+            sample_weight: [0.56694664, 0.22444946, 0.0502188 , 0.22603755, 0.21919113,
+                            0.46474449, 0.06994636, 0.15422078, 0.08162761, 0.36204828,
+                            0.10057877, 0.0329616 , 0.26824534, 0.05424195]
+            size_average: True
+            cfg: { }
+  17: # prefix
+    name: pedattr_uavhuman
+    loss_weight: 0.31
+    gres_ratio: 1  # int, > 0, = Task_GPUs / (world_Size/sum(all_gres_ratios))
+    backbone:
+      type: vit_base_patch16
+      kwargs:
+        task_sp_list: [ 'rel_pos_h', 'rel_pos_w' ] # wrong list would somehow cause .cuda() stuck without error
+        pretrained: True
+        lms_checkpoint_train: fairscale
+        window: False
+        test_pos_mode: learnable_interpolate
+        learnable_pos: True
+        drop_path_rate: 0.2
+        img_size: 1344
+    dataset:
+      type: AttrDataset
+      kwargs:
+        task_spec:
+          dataset: 'uavhuman'
+          data_path: /mnt/path...to.../UVA-Human/AttributeRecognition/uavhuman/dataset.pkl
+          root_path: /mnt/path...to.../UVA-Human/AttributeRecognition/uavhuman/train
+        augmentation:
+          height: 256
+          width: 192
+    sampler:
+      batch_size: 31  # per card
+      shuffle_strategy: 1
+    neck:
+      type: SimpleNeck
+      kwargs:
+        mask_dim: 256
+        mask_forward: False
+    decoder:
+      type: AIOHead
+      kwargs:
+        task: pedattr
+        task_sp_list: [ 'loss.',
+                        'predictor.query_feat',
+                        'predictor.query_embed'] # wrong list would somehow cause .cuda() stuck without error
+        loss_weight: 1.0
+        transformer_predictor_cfg:
+          hidden_dim: 256
+          num_queries: 43
+          nheads: 8
+          dim_feedforward: 2048
+          dec_layers: 9
+          pre_norm: False
+          arch: fan_in
+          enforce_input_project: False
+          mask_on: False
+          num_feature_levels: 1
+          cross_pos_embed: anchor
+          pedattr_cfgs:
+            head_type: per_q
+          cls_out_dim: 1
+        loss_cfg:
+          type: CEL_Sigmoid
+          kwargs:
+            sample_weight: [0.86300439, 0.12964222, 0.014645  , 0.08694309, 0.1215473 ,
+                            0.64722239, 0.13779892, 0.15837607, 0.12914787, 0.13860224,
+                            0.43607489, 0.04529444, 0.27090156, 0.07260706, 0.04702466,
+                            0.04782797, 0.11827226, 0.33034666, 0.01594266, 0.01952666,
+                            0.02280171, 0.00945437, 0.        , 0.20367052, 0.77130322,
+                            0.02502626, 0.        , 0.00154483, 0.59976519, 0.16826299,
+                            0.02273991, 0.0155101 , 0.08342087, 0.0164988 , 0.00593215,
+                            0.07439906, 0.0119261 , 0.        , 0.        , 0.58054749,
+                            0.37316938, 0.04152506, 0.00475808]
+            size_average: True
+            cfg: { }
+  18: # prefix
+    name: pedattr_parse27k
+    loss_weight: 0.52
+    gres_ratio: 1  # int, > 0, = Task_GPUs / (world_Size/sum(all_gres_ratios))
+    backbone:
+      type: vit_base_patch16
+      kwargs:
+        task_sp_list: [ 'rel_pos_h', 'rel_pos_w' ] # wrong list would somehow cause .cuda() stuck without error
+        pretrained: True
+        lms_checkpoint_train: fairscale
+        window: False
+        test_pos_mode: learnable_interpolate
+        learnable_pos: True
+        drop_path_rate: 0.2
+        img_size: 1344
+    dataset:
+      type: AttrDataset
+      kwargs:
+        task_spec:
+          dataset: 'parse27k'
+          data_path: /mnt/path...to.../Parse27k/parse27k/parse27k/dataset.pkl
+          root_path: /mnt/path...to.../Parse27k/parse27k/parse27k/images
+        augmentation:
+          height: 256
+          width: 192
+    sampler:
+      batch_size: 52  # per card
+      shuffle_strategy: 1
+    neck:
+      type: SimpleNeck
+      kwargs:
+        mask_dim: 256
+        mask_forward: False
+    decoder:
+      type: AIOHead
+      kwargs:
+        task: pedattr
+        task_sp_list: [ 'loss.',
+                        'predictor.query_feat',
+                        'predictor.query_embed'] # wrong list would somehow cause .cuda() stuck without error
+        loss_weight: 1.0
+        transformer_predictor_cfg:
+          hidden_dim: 256
+          num_queries: 44
+          nheads: 8
+          dim_feedforward: 2048
+          dec_layers: 9
+          pre_norm: False
+          arch: fan_in
+          enforce_input_project: False
+          mask_on: False
+          num_feature_levels: 1
+          cross_pos_embed: anchor
+          pedattr_cfgs:
+            head_type: per_q
+          cls_out_dim: 1
+        loss_cfg:
+          type: CEL_Sigmoid
+          kwargs:
+            sample_weight: [0.00662252, 0.39000073, 0.46161124, 0.07161051, 0.07015501,
+                            0.00109162, 0.23855615, 0.09344298, 0.03846154, 0.07692308,
+                            0.34269704, 0.07692308, 0.03846154, 0.09344298, 0.10581472,
+                            0.42369551, 0.47048978, 0.06920894, 0.07845135, 0.85233971,
+                            0.39549523, 0.1432574 , 0.46124736, 0.39549523, 0.1432574 ,
+                            0.46124736, 0.40830362, 0.12226184, 0.46943454, 0.40830362,
+                            0.12226184, 0.46943454, 0.04250055, 0.00123717, 0.95626228,
+                            0.24532421, 0.02772724, 0.72694855, 0.04512044, 0.02416127,
+                            0.93071829, 0.26526454, 0.00720472, 0.72753075]
+            size_average: True
+            cfg: { }
+  19: # prefix
+    name: pedattr_market
+    loss_weight: 0.25
+    gres_ratio: 1  # int, > 0, = Task_GPUs / (world_Size/sum(all_gres_ratios))
+    backbone:
+      type: vit_base_patch16
+      kwargs:
+        task_sp_list: [ 'rel_pos_h', 'rel_pos_w' ] # wrong list would somehow cause .cuda() stuck without error
+        pretrained: True
+        lms_checkpoint_train: fairscale
+        window: False
+        test_pos_mode: learnable_interpolate
+        learnable_pos: True
+        drop_path_rate: 0.2
+        img_size: 1344
+    dataset:
+      type: AttrDataset
+      kwargs:
+        task_spec:
+          dataset: 'market'
+          data_path: /mnt/path...to.../market/dataset.pkl
+          root_path: /mnt/path...to.../market/bounding_box_train
+        augmentation:
+          height: 256
+          width: 192
+    sampler:
+      batch_size: 25  # per card
+      shuffle_strategy: 1
+    neck:
+      type: SimpleNeck
+      kwargs:
+        mask_dim: 256
+        mask_forward: False
+    decoder:
+      type: AIOHead
+      kwargs:
+        task: pedattr
+        task_sp_list: [ 'loss.',
+                        'predictor.query_feat',
+                        'predictor.query_embed'] # wrong list would somehow cause .cuda() stuck without error
+        loss_weight: 1.0
+        transformer_predictor_cfg:
+          hidden_dim: 256
+          num_queries: 30
+          nheads: 8
+          dim_feedforward: 2048
+          dec_layers: 9
+          pre_norm: False
+          arch: fan_in
+          enforce_input_project: False
+          mask_on: False
+          num_feature_levels: 1
+          cross_pos_embed: anchor
+          pedattr_cfgs:
+            head_type: per_q
+          cls_out_dim: 1
+        loss_cfg:
+          type: CEL_Sigmoid
+          kwargs:
+            sample_weight: [0.27643785, 0.24134199, 0.11951144, 0.38265306, 0.14486704,
+                            0.10745207, 0.15978664, 0.0169295 , 0.0423624 , 0.00224181,
+                            0.08433828, 0.01607916, 0.13226654, 0.06068336, 0.08804886,
+                            0.11131725, 0.03849722, 0.12128942, 0.30248918, 0.04955164,
+                            0.85459184, 0.61897032, 0.95029375, 0.32189239, 0.02264997,
+                            0.41573902, 0.01646568, 0.78084416, 0.18831169, 0.01437848]
+            size_average: True
+            cfg: { }
+  20:     # prefix
+    name: halpe_pose_256x192
+    loss_weight: 158000.
+    gres_ratio: 1  # int, > 0, = Task_GPUs / (world_Size/sum(all_gres_ratios))
+    backbone:
+      type: vit_base_patch16
+      kwargs:
+        task_sp_list: ['rel_pos_h', 'rel_pos_w'] # wrong list would somehow cause .cuda() stuck without error
+        pretrained: True
+        lms_checkpoint_train: fairscale
+        window: False
+        test_pos_mode: learnable_interpolate
+        learnable_pos: True
+        drop_path_rate: 0.2
+        img_size: 1344
+    dataset:
+      type: MultiPoseDatasetDev
+      kwargs:
+        use_udp: True
+        simp_aug: True
+        dataset_name: 'halpe'
+        ann_file: '/mnt/path...to.../Halpe/train.json'
+        img_prefix: '/mnt/path...to.../Halpe/hico_20160224_det/images/train2015/'
+        data_cfg: {
+                      'image_size':[192, 256],
+                      'heatmap_size':[48, 64],
+                      'num_output_channels': 136,
+                      'num_joints': 20,
+                      'dataset_channel': [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],],
+                      'inference_channel': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
+
+                      'flip_pairs': [[1, 2], [3, 4], [5, 6], [7, 8], [9, 10], [11, 12], [13, 14], [15, 16], ],
+                      'upper_body_ids': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 17, 18,],
+                      'lower_body_ids': [11, 12, 13, 14, 15, 16, 19],
+                      'use_different_joint_weights': False,
+                      'joint_weights': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+
+                      'soft_nms': False,
+                      'nms_thr': 1.0,
+                      'oks_thr': 0.9,
+                      'vis_thr': 0.2,
+                      'use_gt_bbox': True,
+                      'det_bbox_thr': 0.0,
+                      'bbox_file': 'COCO_val2017_detections_AP_H_56_person.json' # files in core/data/datasets/images/resources/* or absolute path
+        }
+    sampler:
+      batch_size: 79
+      shuffle_strategy: 1
+    decoder:
+      type: AIOHead
+      kwargs:
+        task: pos_bce
+        task_sp_list: ['loss.',
+                       'predictor.query_feat',
+                       'predictor.query_embed'] # wrong list would somehow cause .cuda() stuck without error
+        loss_weight: 1.0
+        transformer_predictor_cfg:
+          hidden_dim: 256
+          num_queries: 20
+          nheads: 8
+          dim_feedforward: 2048
+          dec_layers: 9
+          pre_norm: False
+          arch: fan_in
+          enforce_input_project: False
+          mask_on: False  # for pose only
+          num_feature_levels: 1
+          cross_pos_embed: anchor
+          cls_out_dim: 1
+        loss_cfg:
+          type: POS_FocalDiceLoss_bce_cls_emb
+          kwargs:
+            target_type: GaussianHeatMap
+            cfg:
+              deep_supervision: True
+              ignore_blank: False
+              class_weight: 0.001
+              dice_weight: 0.0
+              mask_weight: 1.0
+              redundant_queries: 1
+              dec_layers: 9
+              sample_weight: [0.63643556, 0.5382983299999999, 0.5382983299999999, 0.340705315, 0.340705315,
+              0.82491849, 0.82491849, 0.75516638, 0.75516638, 0.77731828,
+              0.77731828, 0.6869366100000001, 0.6869366100000001, 0.58420838, 0.58420838,
+              0.52246356, 0.52246356, 0.89408324, 0.86454737, 0.7262898]
+        test_cfg:
+          use_udp: True
+  21:     # prefix
+    name: deepfashion_parsing  # loss_weight 5x smaller than as appeared in the paper due to legacy configuration scale for dice/mask_weight
+    loss_weight: 364.
+    gres_ratio: 7  # int, > 0, = Task_GPUs / (world_Size/sum(all_gres_ratios))
+    backbone:
+      type: vit_base_patch16
+      kwargs:
+        task_sp_list: ['rel_pos_h', 'rel_pos_w'] # wrong list would somehow cause .cuda() stuck without error
+        pretrained: True
+        lms_checkpoint_train: fairscale
+        window: False
+        test_pos_mode: learnable_interpolate
+        learnable_pos: True
+        drop_path_rate: 0.2
+        img_size: 1344
+    dataset:
+      type: DeepFashionParsingDataset
+      kwargs:
+        data_path: /mnt/path...to.../deepfashion2 # 
+        cfg:
+          is_flip: True
+          crop_size: [480, 480]
+          is_multi_scale: True
+          scale_factor: 11
+          center_crop_test: False
+          base_size: 480
+#          mean: [0.485, 0.456, 0.406]
+#          std: [0.229, 0.224, 0.225]
+          eval_crop_size: [480, 480]
+          is_photometricdistortion: True
+          brightness: 32
+          contrast_range: [ 0.5, 1.5 ]
+          saturation_range: [ 0.5, 1.5 ]
+          hue_delta: 18
+          is_rotate: True
+
+          ####
+          ignore_value: 255 # duplicated with decoder.kwargs.ignore_value
+          num_classes: 14
+          label_list: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+
+    sampler:
+      batch_size: 52  # per card
+      shuffle_strategy: 1
+    decoder:
+      type: AIOHead
+      kwargs:
+        task: par_bce_cls_emb
+        task_sp_list: [ 'loss.',
+                        'predictor.query_feat',
+                        'predictor.query_embed'] # wrong list would somehow cause .cuda() stuck without error
+        loss_weight: 1.0
+        transformer_predictor_cfg:
+          hidden_dim: 256
+          num_queries: 14
+          nheads: 8
+          dim_feedforward: 2048
+          dec_layers: 9
+          pre_norm: False
+          arch: fan_in
+          enforce_input_project: False
+          mask_on: False
+          num_feature_levels: 1
+          cross_pos_embed: anchor
+          cls_out_dim: 1
+        loss_cfg:
+          type: FocalDiceLoss_bce_cls_emb_sample_weight
+          kwargs:
+            cfg:
+              deep_supervision: True
+              no_object_weight: 0.1
+
+              class_weight: 0.25
+              dice_weight: 5.0
+              mask_weight: 5.0
+              redundant_queries: 1
+              num_points: 12544
+
+              dec_layers: 9
+
+              oversample_ratio: 3.0
+              importance_sample_ratio: 0.75
+              sample_weight:  [1.0000, 0.3677, 0.1862, 0.0028, 0.0697, 0.0832, 0.0102,
+                               0.1893, 0.2864, 0.1595, 0.0887, 0.0406, 0.0926, 0.0336]
+  22:     # prefix
+    name: vip_parsing  # loss_weight 5x smaller than as appeared in the paper due to legacy configuration scale for dice/mask_weight
+    loss_weight: 35.
+    gres_ratio: 1  # int, > 0, = Task_GPUs / (world_Size/sum(all_gres_ratios))
+    backbone:
+      type: vit_base_patch16
+      kwargs:
+        task_sp_list: ['rel_pos_h', 'rel_pos_w'] # wrong list would somehow cause .cuda() stuck without error
+        pretrained: True
+        lms_checkpoint_train: fairscale
+        window: False
+        test_pos_mode: learnable_interpolate
+        learnable_pos: True
+        drop_path_rate: 0.2
+        img_size: 1344
+    dataset:
+      type: VIPParsingDataset
+      kwargs:
+        data_path: /mnt/path...to.../VIP/ # 
+        cfg:
+          is_flip: True
+          crop_size: [480, 480]
+          is_multi_scale: True
+          scale_factor: 11
+          center_crop_test: False
+          base_size: 480
+          eval_crop_size: [480, 480]
+          is_photometricdistortion: True
+          brightness: 32
+          contrast_range: [ 0.5, 1.5 ]
+          saturation_range: [ 0.5, 1.5 ]
+          hue_delta: 18
+          is_rotate: True
+
+          ####
+          ignore_value: 255 # duplicated with decoder.kwargs.ignore_value
+          num_classes: 20
+          label_list: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+
+    sampler:
+      batch_size: 35  # per card
+      shuffle_strategy: 1
+    decoder:
+      type: AIOHead
+      kwargs:
+        task: par_bce_cls_emb
+        task_sp_list: [ 'loss.',
+                        'predictor.query_feat',
+                        'predictor.query_embed'] # wrong list would somehow cause .cuda() stuck without error
+        loss_weight: 1.0
+        transformer_predictor_cfg:
+          hidden_dim: 256
+          num_queries: 20
+          nheads: 8
+          dim_feedforward: 2048
+          dec_layers: 9
+          pre_norm: False
+          arch: fan_in
+          enforce_input_project: False
+          mask_on: False
+          num_feature_levels: 1
+          cross_pos_embed: anchor
+          cls_out_dim: 1
+        loss_cfg:
+          type: FocalDiceLoss_bce_cls_emb_sample_weight
+          kwargs:
+            cfg:
+              deep_supervision: True
+              no_object_weight: 0.1
+
+              class_weight: 0.25
+              dice_weight: 5.0
+              mask_weight: 5.0
+              redundant_queries: 1
+              num_points: 12544
+
+              dec_layers: 9
+
+              oversample_ratio: 3.0
+              importance_sample_ratio: 0.75
+              sample_weight: [1.0, 0.3266, 0.9908, 0.0292, 0.0525,
+              0.9913, 0.108, 0.3, 0.3466, 0.9137,
+              0.9864, 0.0158, 0.119, 0.9926, 0.9789,
+              0.9789, 0.4952, 0.4952, 0.70485, 0.70485]
+  23:     # prefix
+    name: modanet_parsing  # loss_weight 5x smaller than as appeared in the paper due to legacy configuration scale for dice/mask_weight
+    loss_weight: 100.
+    gres_ratio: 2  # int, > 0, = Task_GPUs / (world_Size/sum(all_gres_ratios))
+    backbone:
+      type: vit_base_patch16
+      kwargs:
+        task_sp_list: ['rel_pos_h', 'rel_pos_w'] # wrong list would somehow cause .cuda() stuck without error
+        pretrained: True
+        lms_checkpoint_train: fairscale
+        window: False
+        test_pos_mode: learnable_interpolate
+        learnable_pos: True
+        drop_path_rate: 0.2
+        img_size: 1344
+    dataset:
+      type: ModaNetParsingDataset
+      kwargs:
+        data_path: /mnt/path...to.../ModaNet/ # 
+        cfg:
+          is_flip: True
+          crop_size: [480, 480]
+          is_multi_scale: True
+          scale_factor: 11
+          center_crop_test: False
+          base_size: 480
+          eval_crop_size: [480, 480]
+          is_photometricdistortion: True
+          brightness: 32
+          contrast_range: [ 0.5, 1.5 ]
+          saturation_range: [ 0.5, 1.5 ]
+          hue_delta: 18
+          is_rotate: True
+
+          ####
+          ignore_value: 255 # duplicated with decoder.kwargs.ignore_value
+          num_classes: 14
+          label_list: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+
+    sampler:
+      batch_size: 50  # per card
+      shuffle_strategy: 1
+    decoder:
+      type: AIOHead
+      kwargs:
+        task: par_bce_cls_emb
+        task_sp_list: [ 'loss.',
+                        'predictor.query_feat',
+                        'predictor.query_embed'] # wrong list would somehow cause .cuda() stuck without error
+        loss_weight: 1.0
+        transformer_predictor_cfg:
+          hidden_dim: 256
+          num_queries: 14
+          nheads: 8
+          dim_feedforward: 2048
+          dec_layers: 9
+          pre_norm: False
+          arch: fan_in
+          enforce_input_project: False
+          mask_on: False
+          num_feature_levels: 1
+          cross_pos_embed: anchor
+          cls_out_dim: 1
+        loss_cfg:
+          type: FocalDiceLoss_bce_cls_emb_sample_weight
+          kwargs:
+            cfg:
+              deep_supervision: True
+              no_object_weight: 0.1
+
+              class_weight: 0.25
+              dice_weight: 5.0
+              mask_weight: 5.0
+              redundant_queries: 1
+              num_points: 12544
+
+              dec_layers: 9
+
+              oversample_ratio: 3.0
+              importance_sample_ratio: 0.75
+              sample_weight: [1.0000, 0.3934, 0.2634, 0.1356, 0.7507, 0.4533, 0.2760, 0.1675, 0.4404,
+        0.6636, 0.1346, 0.2598, 0.1042, 0.0956]

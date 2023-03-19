@@ -1,0 +1,47 @@
+common:
+  backbone:
+    kwargs:
+      test_pos_mode: learnable_interpolate
+  tester:
+    type: TesterMultiTaskDev
+
+  sync: True
+  collate: dev_collate
+
+# task_specific_param = ['backbone', 'neck', 'decoder', 'dataset', 'sampler', 'lr_scheduler', 'optimizer']
+tasks:
+  0:
+    name: COCOPoseTest # deprecated
+    loss_weight: 1.0  # *redundant*
+    gres_ratio: 1  # int, > 0| world/sum*ratio, *redundant*
+    dataset:
+      type: COCOPosDatasetDev
+      kwargs:
+#        use_udp: True
+#        data_use_ratio: 0.003
+        ann_file:  /mnt/path...to.../h36m/processed/annotation_body2d/h36m_coco_test.json
+        img_prefix: /mnt/path...to.../h36m/processed/images/
+        test_mode: True
+        data_cfg: {
+          'use_gt_bbox': True,
+          'image_size':[192, 256],
+        }
+    sampler:
+      batch_size: 256 # per card
+    evaluation:
+      cfg:
+        interval: 10
+        metric: ['PCK', 'EPE']
+        key_indicator: AP
+
+        soft_nms: False
+        nms_thr: 1.0
+        oks_thr: 0.9
+        vis_thr: 0.2
+        cls_logits_vis_thr: 0.05
+        no_rescoring: True
+
+#    extra:
+#      min_sizes: [320, 480, 640, 800, 960, 1120]  # TTA
+#      max_size: 4480
+#      flip: True

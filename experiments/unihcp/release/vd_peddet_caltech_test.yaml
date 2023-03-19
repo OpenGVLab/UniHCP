@@ -1,0 +1,31 @@
+common:
+  backbone:
+    kwargs:
+      test_pos_mode: learnable_interpolate
+  tester:
+    type: TesterMultiTaskDev
+    kwargs:
+      pos_thr: 0.0
+      gt_path: '/mnt/path...to.../Caltech/test_caltech_heavy_1xnew.odgt'
+
+
+  sync: True
+  collate: det
+
+tasks:
+  0:
+    name: CrowdHumanPeddetTest
+    loss_weight: 1.0 # *redundant*
+    gres_ratio: 1 # int, > 0| world/sum*ratio, *redundant*
+    dataset:
+      type: PedestrainDetectionDataset
+      kwargs:
+        task_spec:
+          img_folder: /mnt/path...to.../Caltech/Images
+          ann_file: /mnt/path...to.../Caltech/test_caltech_1xnew.json
+          return_masks: False
+        augmentation: {'max_size': 1333}
+        vit: True
+        train: False
+    sampler:
+      batch_size: 1

@@ -1,0 +1,26 @@
+common:
+  backbone:
+    kwargs:
+      test_pos_mode: learnable_interpolate
+  tester:
+    type: TesterMultiTaskDev
+
+  sync: True
+  collate: dev
+
+tasks:
+  0:
+    name: pedattrTest
+    loss_weight: 1.0
+    gres_ratio: 1  # int, > 0| world/sum*ratio
+    dataset:
+      type: AttrDataset
+      kwargs:
+        task_spec:
+          dataset: 'PA-100k'
+          data_path: /mnt/path...to.../PA-100k/dataset.pkl
+          root_path: /mnt/path...to.../PA-100k/data/
+        augmentation:
+          height: 256
+          width: 192
+        train: False

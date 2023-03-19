@@ -1,0 +1,24 @@
+common:
+  tester:
+    type: 'ReIDTester'
+    test_feature_name: 'feature_nobn'
+
+  sync: True
+
+tasks :
+  0 :
+    name : msmt
+    loss_weight : 1.0
+    gres_ratio: 1
+    dataset:
+      type: ReIDTestDataset
+      kwargs:
+        root_path: /mnt/path...to.../
+        query_file_path:
+          - /mnt/path...to.../MSMT17_V1/data_list/probe.txt
+        gallery_file_path:
+          - /mnt/path...to.../MSMT17_V1/data_list/gallery.txt
+        loader: 'pil'
+        vit: True
+    sampler:
+      batch_size: 128 # per card
