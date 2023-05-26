@@ -25,7 +25,9 @@ g=$((${gpus}<8?${gpus}:8))
 declare -A test_info_list
 test_info_list[pose_lpe]=0
 test_info_list[ochuman_pose]=0
+#test_info_list[pose_mpii_lpe]=x  # requires mpii queries
 test_info_list[par_lpe]=1
+#test_info_list[par_atr_lpe]=x  # requires ATR queries
 test_info_list[reid]=2
 test_info_list[reid_cuhk3]=2
 test_info_list[reid_duke]=2
@@ -35,6 +37,7 @@ test_info_list[par_lip_lpe]=3
 test_info_list[par_cihp_lpe]=4
 test_info_list[pa100k_lpe]=5
 test_info_list[rap2_lpe]=6
+#test_info_list[peta_lpe]=x  # requires PETA queries
 test_info_list[pose_aic_lpe]=7
 test_info_list[peddet_caltech]=8
 test_info_list[peddet_inter_lpe]=8

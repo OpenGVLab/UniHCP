@@ -1,0 +1,29 @@
+common:
+  backbone:
+    kwargs:
+      test_pos_mode: learnable_interpolate
+  tester:
+    type: TesterMultiTaskDev
+
+  sync: True
+  collate: dev_collate
+
+# task_specific_param = ['backbone', 'neck', 'decoder', 'dataset', 'sampler', 'lr_scheduler', 'optimizer']
+tasks:
+  0:
+    name: MPIIPoseTest # deprecated
+    loss_weight: 1.0  # *redundant*
+    gres_ratio: 1  # int, > 0| world/sum*ratio, *redundant*
+    dataset:
+      type: MPIIPosDatasetDev
+      kwargs:
+        ann_file: '/mnt/path...to.../coco/annotations/mpii_val.json'
+        img_prefix: '/mnt/path...to.../MPI/images/'
+        test_mode: True
+    sampler:
+      batch_size: 256 # per card
+    evaluation:
+      cfg:
+        interval: 10
+        metric: PCKh
+
