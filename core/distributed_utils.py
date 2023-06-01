@@ -13,8 +13,6 @@ import numpy as np
 import copy
 from collections import defaultdict
 
-from core.utils import named_buffers, sync_print, printlog
-
 
 ### for code compatability after removing dependence on internal package
 new_group = dist.new_group
@@ -1176,3 +1174,26 @@ def reduce_dict(input_dict, task_size, task_rank, group=None, average=True):
             values /= world_size
         reduced_dict = {k: v for k, v in zip(names, values)}
     return reduced_dict
+
+
+def sync_print(*args, **kwargs):
+    rank = get_rank()
+    # dist.barrier()
+    print('sync_print: rank {}, '.format(rank) + ' '.join(args), **kwargs)
+
+
+def printlog(*args, **kwargs):
+    print(f"[rank {get_rank()}]", *args, **kwargs)
+
+
+def named_buffers(self, memo=None, prefix=''):
+    if memo is None:
+        memo = set()
+    for name, b in self._buffers.items():
+        if b is not None and b not in memo:
+            memo.add(b)
+            yield prefix + ('.' if prefix else '') + name, b
+    for mname, module in self.named_children():
+        submodule_prefix = prefix + ('.' if prefix else '') + mname
+        for name, b in module.named_buffers(memo, submodule_prefix):
+            yield name, b

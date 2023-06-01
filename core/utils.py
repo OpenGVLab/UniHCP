@@ -9,6 +9,7 @@ import logging
 from collections import defaultdict
 
 from core import distributed_utils as dist
+from core.distributed_utils import named_buffers, sync_print, printlog
 
 from torch.nn import BatchNorm2d
 from torch.utils.checkpoint import checkpoint
@@ -443,17 +444,6 @@ def freeze_bn(model):
 
     return names
 
-def named_buffers(self, memo=None, prefix=''):
-    if memo is None:
-        memo = set()
-    for name, b in self._buffers.items():
-        if b is not None and b not in memo:
-            memo.add(b)
-            yield prefix + ('.' if prefix else '') + name, b
-    for mname, module in self.named_children():
-        submodule_prefix = prefix + ('.' if prefix else '') + mname
-        for name, b in module.named_buffers(memo, submodule_prefix):
-            yield name, b
 
 def change_tensor_half():
     sync_print('override tensor.half() to preserve task_specific flag')
@@ -706,11 +696,6 @@ def copy_optim_state_dict_cpu_fp16(state_dict):
             new_state[k] = copy.deepcopy(state_dict[k])
     return new_state
 
-def sync_print(*args, **kwargs):
-    rank = dist.get_rank()
-    # dist.barrier()
-    print('sync_print: rank {}, '.format(rank) + ' '.join(args), **kwargs)
-
 def fully_checkpoint_sequential(functions, segments, input, **kwargs):
     r"""Modified version of torch.utils.checkpoint.checkpoint_sequential for memory efficiency.
     It is assumed that at least one of the inputs have requires_grad=True, so we can checkpoint
@@ -754,9 +739,6 @@ def fully_checkpoint_sequential(functions, segments, input, **kwargs):
 #                           preserve_rng_state=preserve)
     return checkpoint(run_function(end + 1, len(functions) - 1, functions), input)#,
 #                      preserve_rng_state=preserve)
-
-def printlog(*args, **kwargs):
-    print(f"[rank {dist.get_rank()}]", *args, **kwargs)
 
 def _max_by_axis(the_list):
     # type: (List[List[int]]) -> List[int]
