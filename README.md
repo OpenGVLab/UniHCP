@@ -9,7 +9,7 @@
 to corresponding dataset locations.
 3. Place MAE pretrained weight <a href="https://dl.fbaipublicfiles.com/mae/pretrain/mae_pretrain_vit_base.pth">mae_pretrain_vit_base.pth</a> under `core\models\backbones\pretrain_weights` folder.
 
-*Only slurm-based distributed training / testing support is implemented in this repo.
+*Only slurm-based distributed training & single-gpu testing is implemented in this repo.
 
 ## Experiments
 
